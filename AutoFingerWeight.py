@@ -114,7 +114,7 @@ class AutoFingerWeight:
                 cmds.scriptJob(event=["SceneOpened", self.on_scene_loaded], parent=Globals.window)
                 cmds.scriptJob(event=["SelectionChanged", self.on_selection_changed], parent=Globals.window)
 
-                # DEV ONLY @TODO Remove this
+                # DEV ONLY
                 # self.mesh_ref.assign_object(cmds.ls("autoFingerWeightMesh"))
                 # self.weight_base_ref.assign_object(cmds.ls("spine_05|clavicle_l|upperarm_l|lowerarm_l|hand_l"))
                 # dev_base_fingers = ['spine_05|clavicle_l|upperarm_l|lowerarm_l|hand_l|thumb_01_l', 'spine_05|clavicle_l|upperarm_l|lowerarm_l|hand_l|thumb_01_l|thumb_02_l', 'spine_05|clavicle_l|upperarm_l|lowerarm_l|hand_l|thumb_01_l|thumb_02_l|thumb_03_l', 'index_metacarpal_l|index_01_l', 'index_metacarpal_l|index_01_l|index_02_l', 'index_metacarpal_l|index_01_l|index_02_l|index_03_l', 'middle_metacarpal_l|middle_01_l', 'middle_metacarpal_l|middle_01_l|middle_02_l', 'middle_metacarpal_l|middle_01_l|middle_02_l|middle_03_l', 'ring_metacarpal_l|ring_01_l', 'ring_metacarpal_l|ring_01_l|ring_02_l', 'ring_metacarpal_l|ring_01_l|ring_02_l|ring_03_l', 'pinky_metacarpal_l|pinky_01_l', 'pinky_metacarpal_l|pinky_01_l|pinky_02_l', 'pinky_metacarpal_l|pinky_01_l|pinky_02_l|pinky_03_l']
@@ -193,6 +193,9 @@ class AutoFingerWeight:
         return None
 
     def afw_transfer_weight_callback(self, *args):
+        """
+        Transfer weights from the weight mesh to the selected mesh or vertices.
+        """
         weight_mesh = self.mesh_ref.object
         target_mesh = self.get_selected_mesh()
         if not weight_mesh:
@@ -201,21 +204,13 @@ class AutoFingerWeight:
         if not target_mesh:
             cmds.warning("No valid mesh selected.")
             return
+
         # Get skin cluster from each mesh
         weight_skin_cluster = cmds.ls(cmds.listHistory(weight_mesh), type='skinCluster')[0]
         target_skin_cluster = cmds.ls(cmds.listHistory(target_mesh), type='skinCluster')[0]
 
         cmds.select(weight_mesh)
         cmds.select(target_mesh, add=True)
-
-        # weight_skin_cluster = cmds.skinCluster(weight_mesh, query=True)
-        # target_skin_cluster = cmds.skinCluster(target_mesh, query=True)
-        print("Weight Skin Cluster: ", weight_skin_cluster, "Target Skin Cluster: ", target_skin_cluster)
-
-        # mel.eval('CopySkinWeights;')
-
-        # performCopySkinWeights 0 (This command is often used to run the copy operation through the UI)
-        # mel.eval('performCopySkinWeights 0;')
 
         mel.eval(f'copySkinWeights -ss "{weight_skin_cluster}" -ds "{target_skin_cluster}" -noMirror -surfaceAssociation closestPoint -influenceAssociation oneToOne;')
 
