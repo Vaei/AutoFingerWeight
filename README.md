@@ -6,6 +6,7 @@ Usage instructions are on the tool's UI itself.
 
 ## Installation
 On Windows, this goes in your `My Documents\maya\scripts\` folder
+
 Create a folder named AutoFingerWeight and clone this repo into it, or download the repo and extract the files into it.
 
 ## Running the Script
