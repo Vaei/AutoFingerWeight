@@ -12,7 +12,7 @@ class Widgets:
             cmds.floatSlider(self.slider_control, edit=True, value=self.default_value)
             cmds.floatField(self.number_control, edit=True, value=self.default_value)
 
-        def __init__(self, layout, label, min_val, max_val, default_value, step):
+        def __init__(self, layout, label, min_val, max_val, default_value, step, height=40):
             self.label = label
             self.min_val = min_val
             self.max_val = max_val
@@ -20,7 +20,7 @@ class Widgets:
             self.step = step
 
             # Create the label, slider, and number field controls
-            column_layout = cmds.rowColumnLayout(numberOfColumns=5, columnWidth=[(1, 100), (2, 150), (3, 60)], p=layout)
+            column_layout = cmds.rowColumnLayout(numberOfColumns=5, h=height, columnWidth=[(1, 100), (2, 150), (3, 60)], p=layout)
             self.label_control = cmds.text(label=label, p=column_layout)
             self.slider_control = cmds.floatSlider(min=self.min_val, max=self.max_val, value=self.default_value,
                                                    step=self.step, width=150, p=column_layout)  # Set width for the slider
@@ -54,20 +54,21 @@ class Widgets:
         """
         A reusable class to create a label, text field, and button in Maya UI for referencing objects.
         """
-        def __init__(self, layout, label, base_type, child_type=None):
+        def __init__(self, layout, label, button_callback, base_type, child_type=None):
             self.label = label
             self.base_type = base_type
             self.child_type = child_type
             self.object = None
+            self.button_callback = button_callback
 
             # Create the label, text field, and button controls
-            column_layout = cmds.rowColumnLayout(numberOfColumns=3, columnWidth=[(1, 100), (2, 200), (3, 50)], p=layout)
+            column_layout = cmds.rowColumnLayout(numberOfColumns=3, columnWidth=[(1, 100), (2, 240), (3, 50)], p=layout)
             self.label_control = cmds.text(label=label, p=column_layout)
             self.text_field = cmds.textField(editable=False, p=column_layout)
             self.assign_btn = cmds.button(label="<<", p=column_layout, c=lambda _: self.assign_object())
 
         def assign_object(self, optional_object=None):
-            selection = cmds.ls(selection=True, type=self.base_type, long=True) if not optional_object else [optional_object]
+            selection = [cmds.ls(selection=True, type=self.base_type, long=True)] if not optional_object else [optional_object]
             if selection:
                 if self.child_type:
                     shape_nodes = cmds.listRelatives(selection[0], shapes=True, fullPath=True)
@@ -83,6 +84,8 @@ class Widgets:
                 cmds.textField(self.text_field, edit=True, text=short_name)
             else:
                 cmds.warning(f"No {self.base_type} object selected.")
+            if self.button_callback:
+                self.button_callback(self.object)
 
         def clear_object(self):
             self.object = None

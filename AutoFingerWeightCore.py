@@ -3,6 +3,7 @@ import os
 import inspect
 import importlib
 import maya.cmds as cmds
+import math
 
 # Get the current script's directory using inspect
 script_dir = os.path.dirname(inspect.getfile(inspect.currentframe()))
@@ -17,12 +18,21 @@ from AutoFingerWeightHelper import Math
 class Core:
     class UndoContext:
         """A context manager to handle undo operations"""
+
+        def __init__(self, chunk_name="UndoAutoFingerWeight", no_flush=False):
+            self.chunk_name = chunk_name
+            self.no_flush = no_flush
+
         def __enter__(self):
             # Open undo chunk
-            cmds.undoInfo(openChunk=True, chunkName="Undo Auto Finger Weight")
+            if self.no_flush:
+                cmds.undoInfo(stateWithoutFlush=False)
+            cmds.undoInfo(openChunk=True, chunkName=self.chunk_name)
 
         def __exit__(self, exc_type, exc_val, exc_tb):
             # Close the undo chunk when the context exits
+            if self.no_flush:
+                cmds.undoInfo(stateWithoutFlush=True)
             cmds.undoInfo(closeChunk=True)
 
             # If there's an exception, propagate it
@@ -31,7 +41,9 @@ class Core:
 
     class GenerateWeightMesh:
         """Creates a mesh from the selected joint chains"""
-        def __init__(self, radius):
+        divisions = 3  # Number of divisions for bridging edges
+
+        def __init__(self, radius, length):
             self.mesh = None
 
             with Core.UndoContext():  # Open undo chunk; the entire operation will automatically be undone in one step
@@ -42,17 +54,19 @@ class Core:
 
                 cylinders = []
 
+                # Generate a cylinder for each joint chain
                 for joint in selected_joints:
-                    cylinder = self.generate_cylinder_for_joint(joint, radius)
+                    cylinder = self.generate_cylinder_for_joint(joint, radius, length)
                     cylinders.append(cylinder)
 
+                # Combine all cylinders into a single mesh
                 if cylinders:
                     self.mesh = cmds.polyUnite(cylinders, ch=False)
                     self.mesh = cmds.ls(cmds.rename(self.mesh, "autoFingerWeightMesh"), long=True)
                     print("Mesh created:", self.mesh)
 
         @staticmethod
-        def generate_cylinder_for_joint(start_joint, radius):
+        def generate_cylinder_for_joint(start_joint, radius, length):
             """Processes a joint chain to create the continuous cylinder mesh, including dummy joints at the start and end."""
 
             # Retrieve all joints in the chain, with their relative positions
@@ -61,7 +75,6 @@ class Core:
             joint_chain.insert(0, start_joint)  # Add the starting joint back into the list
 
             mesh = None
-            print(mesh)
 
             # Ensure there are enough joints in the chain to process
             if len(joint_chain) > 1:
@@ -69,16 +82,13 @@ class Core:
                 expanded_joint_chain, dummy_first = Core.GenerateWeightMesh.expand_first_and_last_joints(joint_chain)
 
                 # Create the mesh along the expanded joint chain
-                mesh = Core.GenerateWeightMesh.create_mesh_along_joints(expanded_joint_chain, radius)
-                # print("Mesh created:", mesh)
+                mesh = Core.GenerateWeightMesh.create_mesh_along_joints(expanded_joint_chain, radius, length)
 
                 # Delete the dummy joints using their references
                 if dummy_first:
                     cmds.delete(dummy_first)
             else:
                 cmds.warning("Selected joint chain has fewer than 2 joints.")
-
-            print(mesh)
 
             return mesh
 
@@ -119,7 +129,7 @@ class Core:
             return [dummy_first] + joint_chain + [dummy_last], dummy_first
 
         @staticmethod
-        def create_mesh_along_joints(joint_chain, joint_radius):
+        def create_mesh_along_joints(joint_chain, radius, length):
             """Creates a continuous mesh along the joint chain by placing cylinders between each pair of joints"""
             positions = Helper.get_joint_positions(joint_chain)
             cylinders = []
@@ -127,7 +137,7 @@ class Core:
 
             # Iterate through each joint pair and create a cylinder between them
             for i in range(len(positions) - 1):
-                cylinder = Helper.create_cylinder_between_joints(positions[i], positions[i + 1], joint_radius)
+                cylinder = Helper.create_cylinder_between_joints(positions[i], positions[i + 1], radius, length)
                 cylinders.append(cylinder)
 
                 # Detect the open edges for each cylinder and map to the joint index
@@ -169,7 +179,7 @@ class Core:
                 num = len(edges)
                 if num == 16:
                     # Bridge the edges
-                    cmds.polyBridgeEdge(edges, ch=False, divisions=1, twist=0, taper=1, curveType=1, smoothingAngle=30)
+                    cmds.polyBridgeEdge(edges, ch=False, divisions=Core.GenerateWeightMesh.divisions, twist=0, taper=1, curveType=1, smoothingAngle=30)
                 elif num != 8:  # This is a start/end tip with nothing to bridge
                     # But it's neither a joining edge nor a tip
                     cmds.warning("joint {i} has invalid number of edges: {num}")
@@ -177,3 +187,151 @@ class Core:
             cmds.select(mesh)
 
             return mesh
+
+    class AutoWeightMesh:
+        """Automatically weights the mesh to the joint chain"""
+        def __init__(self, mesh, base_joint):
+            with Core.UndoContext():  # Open undo chunk; the entire operation will automatically be undone in one step
+                selected_joints = cmds.ls(selection=True, type="joint", long=True)
+                if not selected_joints:
+                    cmds.warning("Please select joints.")
+                    return
+                if len(selected_joints) < 2:
+                    cmds.warning("Please select at least two joints.")
+                    return
+
+                mesh = cmds.ls(mesh)[0]
+                base_joint = cmds.ls(base_joint)[0]
+
+                print(f"Mesh {mesh} base joint {base_joint}")
+
+                # Separate the selected joints into individual finger joint chains
+                joint_chains = Helper.separate_joint_chains(selected_joints)
+
+                # Duplicate the weight mesh
+                temp_mesh = cmds.duplicate(mesh, name=mesh[0]+"_temp", rr=True)[0]
+
+                # Separate the mesh into individual finger meshes
+                finger_meshes = cmds.polySeparate(temp_mesh, ch=False)
+
+                # Assign finger meshes to their respective joint chains based on proximity
+                joint_mesh_map = {}
+                for i, chain in enumerate(joint_chains):
+                    closest_finger_mesh = Helper.find_closest_finger_mesh(chain, finger_meshes)
+                    if closest_finger_mesh:
+                        joint_mesh_map[i] = closest_finger_mesh
+
+                # Initialize an empty list for storing weights for each joint
+                vertex_weight_map = {}
+
+                # Set up the progress window
+                cmds.progressWindow(title='Auto Finger Weight', progress=0, status='Auto-Weighting...', isInterruptable=True)
+
+                # Iterate through each joint chain and assign weights to the vertices
+                for i, chain in enumerate(joint_chains):
+                    if cmds.progressWindow(query=True, isCancelled=True):
+                        cmds.progressWindow(endProgress=True)
+                        return
+
+                    # Update progress for each chain
+                    cmds.progressWindow(edit=True, step=1, status=f"Assigning weights for chain {i + 1}/{len(joint_chains)}")
+
+                    # Get the assigned finger mesh
+                    finger_mesh = joint_mesh_map.get(i)
+                    if not finger_mesh:
+                        cmds.warning(f"No finger mesh assigned for joint chain {i}")
+                        continue
+
+                    # Get the vertices for this finger mesh
+                    vertices = Helper.get_ring_vertices_for_joint(finger_mesh, chain)
+                    consumed_vertices = vertices
+
+                    # Assign the first vertex ring to the base joint with full weight
+                    Helper.accumulate_weights(vertex_weight_map, base_joint, vertices, 1.0)
+
+                    # Assign the last vertex ring to the last joint with full weight
+                    end_vertices = Helper.get_ring_vertices_for_joint(finger_mesh, chain, True)
+                    Helper.accumulate_weights(vertex_weight_map, chain[-1], end_vertices, 1.0)
+
+                    cmds.select(vertices)
+
+                    # Traverse to the next vertex ring and assign weights to the relevant joint
+                    max_attempts = 666
+                    attempts = 0
+                    vtx_ring_index = 0  # 0 is the first potential finger ring NOT the base_joint ring
+                    while vertices:
+                        if cmds.progressWindow(query=True, isCancelled=True):
+                            cmds.progressWindow(endProgress=True)
+                            return
+
+                        # Update progress for each vertex ring
+                        cmds.progressWindow(edit=True, step=1, status=f"Processing ring {vtx_ring_index + 1} of chain {i + 1}")
+
+                        # Weight all the vertex rings in between the ends. 0 is the first vtx ring that is not the end ring!
+                        vertices = Helper.get_next_ring_vertices(vertices, consumed_vertices)
+                        if not vertices or all(v in end_vertices for v in vertices):  # If vertices are in the end ring, we have already assigned those
+                            break
+                        consumed_vertices += vertices
+                        cmds.select(vertices)
+
+                        # Determine knuckle position
+                        knuckle_pos = Helper.get_knuckle_position(vtx_ring_index)
+                        pre_knuckle, knuckle_start, knuckle_mid, knuckle_end, post_knuckle = Helper.expand_knuckle_pos_as_bools(knuckle_pos)
+
+                        # There are 5 rings per knuckle, so we can determine the joint using the vtx ring index
+                        joint_index = vtx_ring_index // 5
+                        prev_joint = chain[joint_index - 1] if joint_index - 1 >= 0 else base_joint
+                        is_last_joint = joint_index == len(chain) - 1
+
+                        print(f"Ring {vtx_ring_index} knuckle position: {knuckle_pos} for joint {joint_index}")
+
+                        # Determine which joints should receive weights
+                        weight_joint = chain[joint_index]
+                        weight_joint_partial = prev_joint
+                        weight = 1.0
+                        if pre_knuckle:
+                            weight = 0.0
+                        elif knuckle_start:
+                            weight = 0.25
+                        elif knuckle_mid:
+                            weight = 0.5
+                        elif knuckle_end:
+                            weight = 0.75
+                        elif post_knuckle:
+                            weight = 1.0
+
+                        # # If we are at the end of the chain, assign full weight to the last joint
+                        # if is_last_joint and post_knuckle:
+                        #     weight = 1.0
+                        #     weight_joint_partial = None
+
+                        # Accumulate weights for both the primary and secondary joints
+                        Helper.accumulate_weights(vertex_weight_map, weight_joint, vertices, weight)
+                        if weight_joint_partial:
+                            Helper.accumulate_weights(vertex_weight_map, weight_joint_partial, vertices, 1.0 - weight)
+                            print(
+                                f"Ring {vtx_ring_index} assigned to {weight_joint} with weight {weight} and {weight_joint_partial} with weight {1.0 - weight}")
+                        else:
+                            print(f"Ring {vtx_ring_index} assigned to {weight_joint} with weight {weight}")
+
+                        # Increment the vertex ring index
+                        vtx_ring_index += 1
+
+                        # Limit the number of attempts to avoid infinite loops
+                        attempts += 1
+                        if attempts >= max_attempts:
+                            cmds.warning(f"Too many attempts to assign vertices to joints for joint chain {i}")
+                            cmds.progressWindow(endProgress=True)
+                            return
+
+                # Close the progress window after all chains are processed
+                cmds.progressWindow(endProgress=True)
+
+                # Weight the original mesh
+                Helper.apply_weights(mesh, base_joint, joint_chains, vertex_weight_map)
+
+                # Delete the temporary mesh
+                cmds.delete(temp_mesh)
+                cmds.select(mesh)
+
+                cmds.confirmDialog(title="Auto Finger Weight", message="Auto Finger Weighting Completed Successfully!", button=["OK"])
