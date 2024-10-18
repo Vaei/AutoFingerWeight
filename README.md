@@ -7,7 +7,9 @@ Usage instructions are on the tool's UI itself.
 ## Installation
 On Windows, this goes in your `My Documents\maya\scripts\` folder
 
-Create a folder named AutoFingerWeight and clone this repo into it, or download the repo and extract the files into it.
+Either clone this repo into the scripts folder, or download the repo and extract the files into it.
+
+The resulting structure should be `\maya\scripts\AutoFingerWeight\AutoFingerWeight.py` (etc)
 
 ## Running the Script
 Run this from the Maya script editor, or add it to a shelf as a python command:
